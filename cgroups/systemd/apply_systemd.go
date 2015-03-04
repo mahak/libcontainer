@@ -26,7 +26,21 @@ type Manager struct {
 }
 
 type subsystem interface {
-	GetStats(string, *cgroups.Stats) error
+	// Returns the stats, as 'stats', corresponding to the cgroup under 'path'.
+	GetStats(path string, stats *cgroups.Stats) error
+	// Set the cgroup represented by cgroup.
+	Set(path string, cgroup *configs.Cgroup) error
+}
+
+var subsystems = map[string]subsystem{
+	"devices":    &fs.DevicesGroup{},
+	"memory":     &fs.MemoryGroup{},
+	"cpu":        &fs.CpuGroup{},
+	"cpuset":     &fs.CpusetGroup{},
+	"cpuacct":    &fs.CpuacctGroup{},
+	"blkio":      &fs.BlkioGroup{},
+	"perf_event": &fs.PerfEventGroup{},
+	"freezer":    &fs.FreezerGroup{},
 }
 
 var (
@@ -298,6 +312,21 @@ func (m *Manager) GetPids() ([]int, error) {
 }
 
 func (m *Manager) GetStats() (*cgroups.Stats, error) {
+	stats := cgroups.NewStats()
+	for name, path := range m.Paths {
+		sys, ok := subsystems[name]
+		if !ok || !cgroups.PathExists(path) {
+			continue
+		}
+		if err := sys.GetStats(path, stats); err != nil {
+			return nil, err
+		}
+	}
+
+	return stats, nil
+}
+
+func (m *Manager) Set(container *configs.Config) error {
 	panic("not implemented")
 }
 
@@ -376,5 +405,5 @@ func joinCpuset(c *configs.Cgroup, pid int) error {
 
 	s := &fs.CpusetGroup{}
 
-	return s.SetDir(path, c.CpusetCpus, c.CpusetMems, pid)
+	return s.ApplyDir(path, c, pid)
 }
