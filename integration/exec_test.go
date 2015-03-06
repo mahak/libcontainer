@@ -188,8 +188,8 @@ func TestRlimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if limit := strings.TrimSpace(out.Stdout.String()); limit != "1024" {
-		t.Fatalf("expected rlimit to be 1024, got %s", limit)
+	if limit := strings.TrimSpace(out.Stdout.String()); limit != "1025" {
+		t.Fatalf("expected rlimit to be 1025, got %s", limit)
 	}
 }
 
@@ -268,7 +268,7 @@ func TestEnter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Execute a first process in the container
+	// Execute another process in the container
 	stdinR2, stdinW2, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -327,6 +327,71 @@ func TestEnter(t *testing.T) {
 
 	if pidns != pidns2 {
 		t.Fatal("The second process isn't in the required pid namespace", pidns, pidns2)
+	}
+}
+
+func TestProcessEnv(t *testing.T) {
+	if testing.Short() {
+		return
+	}
+	root, err := newTestRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+
+	rootfs, err := newRootfs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove(rootfs)
+
+	config := newTemplateConfig(rootfs)
+
+	factory, err := libcontainer.New(root, libcontainer.Cgroupfs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	container, err := factory.Create("test", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer container.Destroy()
+
+	var stdout bytes.Buffer
+	pconfig := libcontainer.Process{
+		Args: []string{"sh", "-c", "env"},
+		Env: []string{
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+			"HOSTNAME=integration",
+			"TERM=xterm",
+			"FOO=BAR",
+		},
+		Stdin:  nil,
+		Stdout: &stdout,
+	}
+	err = container.Start(&pconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for process
+	waitProcess(&pconfig, t)
+
+	outputEnv := string(stdout.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that the environment has the key/value pair we added
+	if !strings.Contains(outputEnv, "FOO=BAR") {
+		t.Fatal("Environment doesn't have the expected FOO=BAR key/value pair: ", outputEnv)
+	}
+
+	// Make sure that HOME is set
+	if !strings.Contains(outputEnv, "HOME=/root") {
+		t.Fatal("Environment doesn't have HOME set: ", outputEnv)
 	}
 }
 
