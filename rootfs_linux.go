@@ -100,9 +100,29 @@ func mount(m *configs.Mount, rootfs, mountLabel string) error {
 			return err
 		}
 		return syscall.Mount(m.Source, dest, m.Device, uintptr(m.Flags), "")
-	case "tmpfs", "mqueue", "devpts", "sysfs":
+	case "tmpfs":
+		stat, err := os.Stat(dest)
+		if err != nil {
+			if err := os.MkdirAll(dest, 0755); err != nil && !os.IsExist(err) {
+				return err
+			}
+		}
+		if err := syscall.Mount(m.Source, dest, m.Device, uintptr(m.Flags), data); err != nil {
+			return err
+		}
+		if stat != nil {
+			if err = os.Chmod(dest, stat.Mode()); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "mqueue", "devpts", "sysfs":
 		if err := os.MkdirAll(dest, 0755); err != nil && !os.IsExist(err) {
 			return err
+		}
+		if m.Device == "mqueue" {
+			// mqueue should not be labeled, otherwise the mount will fail
+			data = ""
 		}
 		return syscall.Mount(m.Source, dest, m.Device, uintptr(m.Flags), data)
 	case "bind":
