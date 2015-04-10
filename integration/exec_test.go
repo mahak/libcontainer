@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/docker/libcontainer"
+	"github.com/docker/libcontainer/cgroups/systemd"
 	"github.com/docker/libcontainer/configs"
 )
 
@@ -481,6 +482,17 @@ func TestProcessCaps(t *testing.T) {
 }
 
 func TestFreeze(t *testing.T) {
+	testFreeze(t, false)
+}
+
+func TestSystemdFreeze(t *testing.T) {
+	if !systemd.UseSystemd() {
+		t.Skip("Systemd is unsupported")
+	}
+	testFreeze(t, true)
+}
+
+func testFreeze(t *testing.T, systemd bool) {
 	if testing.Short() {
 		return
 	}
@@ -497,6 +509,9 @@ func TestFreeze(t *testing.T) {
 	defer remove(rootfs)
 
 	config := newTemplateConfig(rootfs)
+	if systemd {
+		config.Cgroups.Slice = "system.slice"
+	}
 
 	factory, err := libcontainer.New(root, libcontainer.Cgroupfs)
 	if err != nil {
@@ -557,5 +572,145 @@ func TestFreeze(t *testing.T) {
 	}
 	if !s.Success() {
 		t.Fatal(s.String())
+	}
+}
+
+func TestContainerState(t *testing.T) {
+	if testing.Short() {
+		return
+	}
+	root, err := newTestRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+
+	rootfs, err := newRootfs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove(rootfs)
+
+	l, err := os.Readlink("/proc/1/ns/ipc")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config := newTemplateConfig(rootfs)
+	config.Namespaces = configs.Namespaces([]configs.Namespace{
+		{Type: configs.NEWNS},
+		{Type: configs.NEWUTS},
+		// host for IPC
+		//{Type: configs.NEWIPC},
+		{Type: configs.NEWPID},
+		{Type: configs.NEWNET},
+	})
+
+	factory, err := libcontainer.New(root, libcontainer.Cgroupfs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	container, err := factory.Create("test", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer container.Destroy()
+
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &libcontainer.Process{
+		Args:  []string{"cat"},
+		Env:   standardEnvironment,
+		Stdin: stdinR,
+	}
+	err = container.Start(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdinR.Close()
+	defer p.Signal(os.Kill)
+
+	st, err := container.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	l1, err := os.Readlink(st.NamespacePaths[configs.NEWIPC])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l1 != l {
+		t.Fatal("Container using non-host ipc namespace")
+	}
+	stdinW.Close()
+	p.Wait()
+}
+
+func TestPassExtraFiles(t *testing.T) {
+	if testing.Short() {
+		return
+	}
+
+	rootfs, err := newRootfs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove(rootfs)
+
+	config := newTemplateConfig(rootfs)
+
+	factory, err := libcontainer.New(rootfs, libcontainer.Cgroupfs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	container, err := factory.Create("test", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer container.Destroy()
+
+	var stdout bytes.Buffer
+	pipeout1, pipein1, err := os.Pipe()
+	pipeout2, pipein2, err := os.Pipe()
+	process := libcontainer.Process{
+		Args:       []string{"sh", "-c", "cd /proc/$$/fd; echo -n *; echo -n 1 >3; echo -n 2 >4"},
+		Env:        []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		ExtraFiles: []*os.File{pipein1, pipein2},
+		Stdin:      nil,
+		Stdout:     &stdout,
+	}
+	err = container.Start(&process)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitProcess(&process, t)
+
+	out := string(stdout.Bytes())
+	// fd 5 is the directory handle for /proc/$$/fd
+	if out != "0 1 2 3 4 5" {
+		t.Fatalf("expected to have the file descriptors '0 1 2 3 4 5' passed to init, got '%s'", out)
+	}
+	var buf = []byte{0}
+	_, err = pipeout1.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out1 := string(buf)
+	if out1 != "1" {
+		t.Fatalf("expected first pipe to receive '1', got '%s'", out1)
+	}
+
+	_, err = pipeout2.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out2 := string(buf)
+	if out2 != "2" {
+		t.Fatalf("expected second pipe to receive '2', got '%s'", out2)
 	}
 }

@@ -3,7 +3,6 @@
 package systemd
 
 import (
-	"bytes"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -217,17 +216,15 @@ func (m *Manager) Apply(pid int) error {
 		return err
 	}
 
+	// FIXME: Systemd does have `BlockIODeviceWeight` property, but we got problem
+	// using that (at least on systemd 208, see https://github.com/docker/libcontainer/pull/354),
+	// so use fs work around for now.
+	if err := joinBlkio(c, pid); err != nil {
+		return err
+	}
+
 	paths := make(map[string]string)
-	for _, sysname := range []string{
-		"devices",
-		"memory",
-		"cpu",
-		"cpuset",
-		"cpuacct",
-		"blkio",
-		"perf_event",
-		"freezer",
-	} {
+	for sysname := range subsystems {
 		subsystemPath, err := getSubsystemPath(m.Cgroups, sysname)
 		if err != nil {
 			// Don't fail if a cgroup hierarchy was not found, just skip this subsystem
@@ -256,6 +253,21 @@ func writeFile(dir, file, data string) error {
 	return ioutil.WriteFile(filepath.Join(dir, file), []byte(data), 0700)
 }
 
+func join(c *configs.Cgroup, subsystem string, pid int) (string, error) {
+	path, err := getSubsystemPath(c, subsystem)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(path, 0755); err != nil && !os.IsExist(err) {
+		return "", err
+	}
+	if err := writeFile(path, "cgroup.procs", strconv.Itoa(pid)); err != nil {
+		return "", err
+	}
+
+	return path, nil
+}
+
 func joinCpu(c *configs.Cgroup, pid int) error {
 	path, err := getSubsystemPath(c, "cpu")
 	if err != nil {
@@ -275,16 +287,11 @@ func joinCpu(c *configs.Cgroup, pid int) error {
 }
 
 func joinFreezer(c *configs.Cgroup, pid int) error {
-	path, err := getSubsystemPath(c, "freezer")
-	if err != nil {
+	if _, err := join(c, "freezer", pid); err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(path, 0755); err != nil && !os.IsExist(err) {
-		return err
-	}
-
-	return ioutil.WriteFile(filepath.Join(path, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0700)
+	return nil
 }
 
 func getSubsystemPath(c *configs.Cgroup, subsystem string) (string, error) {
@@ -312,21 +319,15 @@ func (m *Manager) Freeze(state configs.FreezerState) error {
 		return err
 	}
 
-	if err := ioutil.WriteFile(filepath.Join(path, "freezer.state"), []byte(state), 0); err != nil {
+	prevState := m.Cgroups.Freezer
+	m.Cgroups.Freezer = state
+
+	freezer := subsystems["freezer"]
+	err = freezer.Set(path, m.Cgroups)
+	if err != nil {
+		m.Cgroups.Freezer = prevState
 		return err
 	}
-	for {
-		state_, err := ioutil.ReadFile(filepath.Join(path, "freezer.state"))
-		if err != nil {
-			return err
-		}
-		if string(state) == string(bytes.TrimSpace(state_)) {
-			break
-		}
-		time.Sleep(1 * time.Millisecond)
-	}
-
-	m.Cgroups.Freezer = state
 
 	return nil
 }
@@ -375,29 +376,16 @@ func getUnitName(c *configs.Cgroup) string {
 // because systemd will re-write the device settings if it needs to re-apply the cgroup context.
 // This happens at least for v208 when any sibling unit is started.
 func joinDevices(c *configs.Cgroup, pid int) error {
-	path, err := getSubsystemPath(c, "devices")
+	path, err := join(c, "devices", pid)
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(path, 0755); err != nil && !os.IsExist(err) {
+	devices := subsystems["devices"]
+	if err := devices.Set(path, c); err != nil {
 		return err
 	}
 
-	if err := ioutil.WriteFile(filepath.Join(path, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0700); err != nil {
-		return err
-	}
-
-	if !c.AllowAllDevices {
-		if err := writeFile(path, "devices.deny", "a"); err != nil {
-			return err
-		}
-	}
-	for _, dev := range c.AllowedDevices {
-		if err := writeFile(path, "devices.allow", dev.CgroupString()); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -435,4 +423,21 @@ func joinCpuset(c *configs.Cgroup, pid int) error {
 	s := &fs.CpusetGroup{}
 
 	return s.ApplyDir(path, c, pid)
+}
+
+// `BlockIODeviceWeight` property of systemd does not work properly, and systemd
+// expects device path instead of major minor numbers, which is also confusing
+// for users. So we use fs work around for now.
+func joinBlkio(c *configs.Cgroup, pid int) error {
+	path, err := getSubsystemPath(c, "blkio")
+	if err != nil {
+		return err
+	}
+	if c.BlkioWeightDevice != "" {
+		if err := writeFile(path, "blkio.weight_device", c.BlkioWeightDevice); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
