@@ -4,8 +4,10 @@ package systemd
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -38,6 +40,7 @@ var subsystems = map[string]subsystem{
 	"cpuset":     &fs.CpusetGroup{},
 	"cpuacct":    &fs.CpuacctGroup{},
 	"blkio":      &fs.BlkioGroup{},
+	"hugetlb":    &fs.HugetlbGroup{},
 	"perf_event": &fs.PerfEventGroup{},
 	"freezer":    &fs.FreezerGroup{},
 }
@@ -237,6 +240,28 @@ func (m *Manager) Apply(pid int) error {
 	}
 
 	m.Paths = paths
+
+	var cpuShares int64
+
+	fd, err := os.Open(path.Join(m.Paths["cpu"], "cpu.shares"))
+	if err != nil {
+		return err
+	}
+
+	_, err = fmt.Fscanf(fd, "%d", &cpuShares)
+	if err != nil && err != io.EOF {
+		return err
+	}
+
+	fd.Close()
+
+	if c.CpuShares != 0 {
+		if c.CpuShares > cpuShares {
+			return fmt.Errorf("The maximum allowed cpu-shares is %d", cpuShares)
+		} else if c.CpuShares < cpuShares {
+			return fmt.Errorf("The minimum allowed cpu-shares is %d", cpuShares)
+		}
+	}
 
 	return nil
 }
