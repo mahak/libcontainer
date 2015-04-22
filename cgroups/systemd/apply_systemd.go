@@ -4,10 +4,8 @@ package systemd
 
 import (
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -238,28 +236,11 @@ func (m *Manager) Apply(pid int) error {
 		}
 		paths[sysname] = subsystemPath
 	}
-
 	m.Paths = paths
 
-	var cpuShares int64
-
-	fd, err := os.Open(path.Join(m.Paths["cpu"], "cpu.shares"))
-	if err != nil {
-		return err
-	}
-
-	_, err = fmt.Fscanf(fd, "%d", &cpuShares)
-	if err != nil && err != io.EOF {
-		return err
-	}
-
-	fd.Close()
-
-	if c.CpuShares != 0 {
-		if c.CpuShares > cpuShares {
-			return fmt.Errorf("The maximum allowed cpu-shares is %d", cpuShares)
-		} else if c.CpuShares < cpuShares {
-			return fmt.Errorf("The minimum allowed cpu-shares is %d", cpuShares)
+	if paths["cpu"] != "" {
+		if err := fs.CheckCpushares(paths["cpu"], c.CpuShares); err != nil {
+			return err
 		}
 	}
 
@@ -404,7 +385,7 @@ func getUnitName(c *configs.Cgroup) string {
 // * Support for wildcards to allow /dev/pts support
 //
 // The second is available in more recent systemd as "char-pts", but not in e.g. v208 which is
-// in wide use. When both these are availalable we will be able to switch, but need to keep the old
+// in wide use. When both these are available we will be able to switch, but need to keep the old
 // implementation for backwards compat.
 //
 // Note: we can't use systemd to set up the initial limits, and then change the cgroup
