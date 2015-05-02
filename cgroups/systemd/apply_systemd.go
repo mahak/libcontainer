@@ -398,39 +398,7 @@ func joinDevices(c *configs.Cgroup, pid int) error {
 	}
 
 	devices := subsystems["devices"]
-	if err := devices.Set(path, c); err != nil {
-		return err
-	}
-
-	if !c.AllowAllDevices {
-		if err := writeFile(path, "devices.deny", "a"); err != nil {
-			return err
-		}
-		for _, dev := range c.AllowedDevices {
-			if err := writeFile(path, "devices.allow", dev.CgroupString()); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	if err := writeFile(path, "devices.allow", "a"); err != nil {
-		return err
-	}
-
-	for _, dev := range c.DeniedDevices {
-		if err := writeFile(path, "devices.deny", dev.CgroupString()); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// Symmetrical public function to update device based cgroups.  Also available
-// in the fs implementation.
-func ApplyDevices(c *configs.Cgroup, pid int) error {
-	return joinDevices(c, pid)
+	return devices.Set(path, c)
 }
 
 func joinMemory(c *configs.Cgroup, pid int) error {
@@ -473,6 +441,26 @@ func joinBlkio(c *configs.Cgroup, pid int) error {
 	}
 	if c.BlkioWeightDevice != "" {
 		if err := writeFile(path, "blkio.weight_device", c.BlkioWeightDevice); err != nil {
+			return err
+		}
+	}
+	if c.BlkioThrottleReadBpsDevice != "" {
+		if err := writeFile(path, "blkio.throttle.read_bps_device", c.BlkioThrottleReadBpsDevice); err != nil {
+			return err
+		}
+	}
+	if c.BlkioThrottleWriteBpsDevice != "" {
+		if err := writeFile(path, "blkio.throttle.write_bps_device", c.BlkioThrottleWriteBpsDevice); err != nil {
+			return err
+		}
+	}
+	if c.BlkioThrottleReadIOpsDevice != "" {
+		if err := writeFile(path, "blkio.throttle.read_iops_device", c.BlkioThrottleReadIOpsDevice); err != nil {
+			return err
+		}
+	}
+	if c.BlkioThrottleWriteIOpsDevice != "" {
+		if err := writeFile(path, "blkio.throttle.write_iops_device", c.BlkioThrottleWriteIOpsDevice); err != nil {
 			return err
 		}
 	}
