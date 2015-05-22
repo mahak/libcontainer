@@ -1,3 +1,5 @@
+// +build linux
+
 package fs
 
 import (
@@ -16,8 +18,7 @@ type MemoryGroup struct {
 
 func (s *MemoryGroup) Apply(d *data) error {
 	dir, err := d.join("memory")
-	// only return an error for memory if it was specified
-	if err != nil && (d.c.Memory != 0 || d.c.MemoryReservation != 0 || d.c.MemorySwap != 0) {
+	if err != nil && !cgroups.IsNotFound(err) {
 		return err
 	}
 	defer func() {
@@ -52,6 +53,11 @@ func (s *MemoryGroup) Set(path string, cgroup *configs.Cgroup) error {
 	}
 	if cgroup.MemorySwap > 0 {
 		if err := writeFile(path, "memory.memsw.limit_in_bytes", strconv.FormatInt(cgroup.MemorySwap, 10)); err != nil {
+			return err
+		}
+	}
+	if cgroup.KernelMemory > 0 {
+		if err := writeFile(path, "memory.kmem.limit_in_bytes", strconv.FormatInt(cgroup.KernelMemory, 10)); err != nil {
 			return err
 		}
 	}
